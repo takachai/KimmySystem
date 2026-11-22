@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#315efb">
+<title>New Quotation — Kimmy Systems</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  /* quote.html only: page layout (the app components come from css/style.css) */
+  body { display: block; padding: 18px 14px 40px; }
+  .qt-page { max-width: 860px; margin: 0 auto; }
+  .qt-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 0 14px; }
+  .qt-top a { color: var(--link, #315efb); text-decoration: none; font-weight: 600; }
+  .qt-top b { font-size: 20px; }
+  .qt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .qt-grid .full { grid-column: 1 / -1; }
+  .qt-grid label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .qt-grid input, .qt-grid textarea { width: 100%; }
+  .qt-items { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  .qt-items th, .qt-items td { padding: 6px; text-align: left; vertical-align: middle; }
+  .qt-items th { font-size: 12px; opacity: .75; border-bottom: 1px solid var(--line, #e5e7eb); }
+  .qt-items td input { width: 100%; }
+  .qt-items td.num input, .qt-items td.amt { text-align: right; }
+  .qt-items td.amt { white-space: nowrap; font-weight: 600; }
+  .qt-total { display: flex; justify-content: flex-end; align-items: baseline; gap: 10px; margin-top: 12px; font-size: 18px; }
+  .qt-total b { font-size: 22px; }
+  .qt-ok { display: none; margin-top: 14px; padding: 14px; border-radius: 12px; background: #e8f6ef; border: 1px solid #a7e8c0; color: #067647; }
+  .qt-ok.show { display: block; }
+  @media (max-width: 640px) { .qt-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="qt-page">
+  <div class="qt-top">
+    <a href="index.html">← Back to Kimmy Systems</a>
+    <b>🧾 New Quotation</b>
+  </div>
+
+  <div class="card">
+    <div class="section-title">Quotation details</div>
+    <div class="qt-grid">
+      <div class="field"><label>Quotation No.</label><input id="qNo" readonly></div>
+      <div class="field"><label>Date</label><input id="qDate" type="date"></div>
+      <div class="field"><label>Customer / company name *</label><input id="qCustomer" placeholder="Customer or company name" autocomplete="off"></div>
+      <div class="field"><label>Attn / contact person</label><input id="qAttn" placeholder="Contact person" autocomplete="off"></div>
+      <div class="field"><label>Phone</label><input id="qPhone" placeholder="Phone number" autocomplete="off"></div>
+      <div class="field"><label>Project</label><input id="qProject" placeholder="Project name" autocomplete="off"></div>
+      <div class="field"><label>Prepared by</label><input id="qBy" placeholder="Your name" autocomplete="off"></div>
+      <div class="field"><label>Deposit (USD)</label><input id="qDeposit" type="number" min="0" step="0.01" value="0"></div>
+      <div class="field full"><label>Notes</label><textarea id="qNotes" rows="2" placeholder="Notes for this quotation"></textarea></div>
+    </div>
+
+    <div class="section-title" style="margin-top:18px">Items</div>
+    <table class="qt-items">
+      <thead><tr><th style="width:38%">Item</th><th style="width:16%">Size</th><th style="width:11%">Qty</th><th style="width:15%">Unit price</th><th style="width:13%">Amount</th><th style="width:7%"></th></tr></thead>
+      <tbody id="qItems"></tbody>
+    </table>
+    <div class="actions" style="margin-top:10px">
+      <button type="button" class="secondary small" id="qAddItem">＋ Add item</button>
+    </div>
+    <div class="qt-total"><span>Total</span><b id="qTotal">$0.00</b></div>
+
+    <div class="actions" style="margin-top:16px">
+      <button type="button" id="qSave">💾 Save quotation</button>
+      <button type="button" class="secondary" id="qReset">Clear form</button>
+    </div>
+    <div class="hint">Saving here adds the quotation to Kimmy Systems on this device — open <b>index.html → Quotations</b> to see it, turn it into an order, or export the PDF.</div>
+
+    <div class="qt-ok" id="qOk"></div>
+  </div>
+</div>
+
+<script>
+/* quote.html — saves into the SAME data as index.html (localStorage key printAdsManager_v1),
+   using the exact quotation shape the main app uses. */
+(function(){
+  var KEY = 'printAdsManager_v1';
+  var QT_NO_RE = /^QT-\d{4}-(\d+)$/i;
+
+  function id(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+  function money(n){ return '$' + (Number(n)||0).toFixed(2); }
+  function $(x){ return document.getElementById(x); }
+
+  function loadData(){
+    try {
+      var raw = JSON.parse(localStorage.getItem(KEY)) || {};
+      if (!Array.isArray(raw.quotations)) raw.quotations = [];
+      return raw;
+    } catch(e){ return { quotations: [] }; }
+  }
+  function persist(data){
+    localStorage.setItem(KEY, JSON.stringify(data));
+    try { localStorage.setItem(KEY + '_lastSave', String(Date.now())); } catch(e){}
+  }
+  function nextQuotationNo(data){
+    var max = 0, used = {};
+    (data.quotations || []).forEach(function(q){
+      var no = String(q.no || '').trim().toUpperCase();
+      used[no] = true;
+      var m = QT_NO_RE.exec(String(q.no || '').trim());
+      if (m) max = Math.max(max, Number(m[1]));
+    });
+    var n;
+    do { max++; n = 'QT-' + new Date().getFullYear() + '-' + String(max).padStart(4,'0'); }
+    while (used[n]);
+    return n;
+  }
+
+  /* ---- items table ---- */
+  function rowHtml(){
+    return '<td><input class="it-name" placeholder="Item name" autocomplete="off"></td>'
+      + '<td><input class="it-size" placeholder="Size" autocomplete="off"></td>'
+      + '<td class="num"><input class="it-qty" type="number" min="0" step="any" value="1"></td>'
+      + '<td class="num"><input class="it-price" type="number" min="0" step="0.01" value=""></td>'
+      + '<td class="amt">$0.00</td>'
+      + '<td><button type="button" class="secondary small it-del" title="Remove row">✕</button></td>';
+  }
+  function addRow(){
+    var tr = document.createElement('tr');
+    tr.innerHTML = rowHtml();
+    $('qItems').appendChild(tr);
+    tr.querySelector('.it-name').focus();
+  }
+  function recalc(){
+    var total = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('#qItems tr'), function(tr){
+      var qty = Number(tr.querySelector('.it-qty').value) || 0;
+      var price = Number(tr.querySelector('.it-price').value) || 0;
+      var amt = Math.round(qty * price * 100) / 100;
+      tr.querySelector('.amt').textContent = money(amt);
+      total += amt;
+    });
+    $('qTotal').textContent = money(Math.round(total * 100) / 100);
+  }
+
+  $('qItems').addEventListener('input', recalc);
+  $('qItems').addEventListener('click', function(e){
+    var b = e.target.closest('.it-del');
+    if (!b) return;
+    var rows = document.querySelectorAll('#qItems tr');
+    if (rows.length <= 1) { b.closest('tr').querySelectorAll('input').forEach(function(i){ i.value = i.classList.contains('it-qty') ? '1' : ''; }); recalc(); return; }
+    b.closest('tr').remove();
+    recalc();
+  });
+  $('qAddItem').addEventListener('click', addRow);
+
+  /* ---- form ---- */
+  function resetForm(){
+    var data = loadData();
+    $('qNo').value = nextQuotationNo(data);
+    $('qDate').value = todayStr();
+    ['qCustomer','qAttn','qPhone','qProject','qBy','qNotes'].forEach(function(k){ $(k).value = ''; });
+    $('qDeposit').value = '0';
+    $('qItems').innerHTML = '';
+    addRow();
+    recalc();
+    $('qOk').classList.remove('show');
+    $('qOk').innerHTML = '';
+  }
+  $('qReset').addEventListener('click', resetForm);
+
+  $('qSave').addEventListener('click', function(){
+    var customer = $('qCustomer').value.trim();
+    if (!customer) { alert('Please enter the customer / company name.'); $('qCustomer').focus(); return; }
+    var items = [];
+    var ok = true;
+    Array.prototype.forEach.call(document.querySelectorAll('#qItems tr'), function(tr){
+      var name = tr.querySelector('.it-name').value.trim();
+      var size = tr.querySelector('.it-size').value.trim();
+      var qty = Number(tr.querySelector('.it-qty').value) || 0;
+      var price = Number(tr.querySelector('.it-price').value) || 0;
+      if (!name && !size && qty === 0 && price === 0) return; // empty row, skip
+      if (!name) { ok = false; return; }
+      items.push({
+        id: id(), name: name, description: '', note: '', size: size, unit: '',
+        qtyPer: 1, perAuto: true, qty: qty, unitPrice: price,
+        disc: 0, discMode: 'pct', image: '', productId: '',
+        problem: false, problemReason: '', problemAt: 0,
+        problemSolved: false, problemSolvedAt: 0, catalog: null
+      });
+    });
+    if (!ok) { alert('Every item row needs a name.'); return; }
+    if (!items.length) { alert('Please add at least one item.'); return; }
+
+    var data = loadData();
+    var no = $('qNo').value.trim() || nextQuotationNo(data);
+    var q = {
+      id: id(), no: no, customerId: '',
+      customer: customer,
+      project: $('qProject').value.trim(),
+      phone: $('qPhone').value.trim(),
+      attn: $('qAttn').value.trim(),
+      by: $('qBy').value.trim(),
+      issued: $('qDate').value || todayStr(),
+      deposit: Math.max(0, Number($('qDeposit').value) || 0),
+      payments: [], notes: $('qNotes').value.trim(),
+      hidden: false, items: items,
+      created: Date.now(), updated: Date.now()
+    };
+    data.quotations.unshift(q);
+    persist(data);
+
+    var total = items.reduce(function(s,it){ return s + (Number(it.qty)||0) * (Number(it.unitPrice)||0); }, 0);
+    $('qOk').innerHTML = '✓ Quotation <b>' + no + '</b> saved — ' + items.length
+      + ' item(s), total <b>' + money(total) + '</b>.<br>'
+      + '<a href="index.html">Open it in Kimmy Systems → Quotations</a> &nbsp;·&nbsp; '
+      + '<a href="#" id="qAgain">Make another quotation</a>';
+    $('qOk').classList.add('show');
+    try { $('qOk').scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+    $('qAgain').addEventListener('click', function(e){ e.preventDefault(); resetForm(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  });
+
+  resetForm();
+})();
+</script>
+</body>
+</html>
